@@ -1,0 +1,52 @@
+///Download month: 1,4,5,6,7,8,11,12
+var roi = table
+// Function to mask clouds using QA60 band
+function maskClouds(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;  // Bit 10 = clouds
+  var cirrusBitMask = 1 << 11; // Bit 11 = cirrus
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+               .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).copyProperties(image, ['system:time_start']);
+}
+
+// Function to get mean image per month
+function getMonthlyMean(month) {
+  var start = ee.Date.fromYMD(2024, month, 1);
+  var end = start.advance(1, 'month');
+
+  var collection = ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
+    .filterDate(start, end)
+    .filterBounds(roi)
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
+    .map(maskClouds);
+
+  var meanImage = collection.median()
+    .set('month', month)
+    .set('system:time_start', start.millis());
+
+  return meanImage;
+}
+
+// Create list of months
+var months = ee.List([1,4,5,6,7,8,11,12]);
+
+// Build image collection with mean image per month
+var monthlyMeans = ee.ImageCollection(months.map(getMonthlyMean));
+
+// Visualize and Export
+months.getInfo().forEach(function(month) {
+  var image = ee.Image(monthlyMeans.filter(ee.Filter.eq('month', month)).first());
+
+  var exportName = 'S2_2024_MonthlyMean_' + month;
+  Map.addLayer(image.clip(roi), {bands: ['B4', 'B3', 'B2'], min: 0, max: 3000}, exportName);
+
+  Export.image.toDrive({
+    image: image.clip(roi),
+    description: exportName,
+    folder: 'S2_MonthlyMean',
+    region: roi,
+    scale: 10,
+    maxPixels: 1e13
+  });
+});
